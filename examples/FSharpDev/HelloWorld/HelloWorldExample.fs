@@ -30,4 +30,10 @@ let run () =
     |> NBomberRunner.withTestSuite "example"
     |> NBomberRunner.withTestName "hello_world_test"
     |> NBomberRunner.run
-    |> ignore
+    |> function
+        | Ok stats ->
+            if stats.ScenarioStats.[0].StepStats.[0].Mean = 0.0 then ()
+            ()
+
+        | Error error ->
+            ()

@@ -4,9 +4,9 @@ open System.Diagnostics
 open System.Threading
 open System.Threading.Tasks
 
-open Nessos.Streams
 open Serilog
 open FSharp.Control.Tasks.NonAffine
+open Nessos.Streams
 
 open NBomber.Contracts
 open NBomber.Domain
@@ -24,7 +24,6 @@ type ActorDep = {
 
 type ScenarioActor(dep: ActorDep, correlationId: CorrelationId) =
 
-    let _allScnResponses = Array.init<ResizeArray<StepResponse>> dep.Scenario.Steps.Length (fun _ -> ResizeArray(capacity = 1_000_000))
     let _isAllExecSync = Step.isAllExecSync dep.Scenario.Steps
 
     let _stepDep = { ScenarioName = dep.Scenario.ScenarioName
@@ -47,9 +46,9 @@ type ScenarioActor(dep: ActorDep, correlationId: CorrelationId) =
                 _working <- true
                 do! Task.Yield()
                 if _isAllExecSync then
-                    Step.execSteps _stepDep _steps (dep.Scenario.GetStepsOrder()) _allScnResponses
+                    Step.execSteps _stepDep _steps (dep.Scenario.GetStepsOrder())
                 else
-                    do! Step.execStepsAsync _stepDep _steps (dep.Scenario.GetStepsOrder()) _allScnResponses
+                    do! Step.execStepsAsync _stepDep _steps (dep.Scenario.GetStepsOrder())
             else
                 dep.Logger.Fatal("ExecSteps was invoked for already working actor with scenario '{ScenarioName}'.", dep.Scenario.ScenarioName)
         finally
@@ -63,9 +62,9 @@ type ScenarioActor(dep: ActorDep, correlationId: CorrelationId) =
                 do! Task.Yield()
                 while _working && not dep.CancellationToken.IsCancellationRequested do
                     if _isAllExecSync then
-                        Step.execSteps _stepDep _steps (dep.Scenario.GetStepsOrder()) _allScnResponses
+                        Step.execSteps _stepDep _steps (dep.Scenario.GetStepsOrder())
                     else
-                        do! Step.execStepsAsync _stepDep _steps (dep.Scenario.GetStepsOrder()) _allScnResponses
+                        do! Step.execStepsAsync _stepDep _steps (dep.Scenario.GetStepsOrder())
             else
                 dep.Logger.Fatal("RunInfinite was invoked for already working actor with scenario '{ScenarioName}'.", dep.Scenario.ScenarioName)
         finally
@@ -74,10 +73,8 @@ type ScenarioActor(dep: ActorDep, correlationId: CorrelationId) =
 
     member _.Stop() = _working <- false
 
-    member _.GetStepResults(duration) =
-        let filteredResponses = _allScnResponses |> Array.map(Stream.ofResizeArray >> Step.filterByDuration duration)
-
-        dep.Scenario.Steps
-        |> Stream.ofList
-        |> Stream.mapi(fun i step -> step, StepResults.create(step.StepName, filteredResponses.[i]))
-        |> Stream.choose(fun (step, results) -> if step.DoNotTrack then None else Some results)
+    member _.GetStepStats(duration) =
+        _steps
+        |> Stream.ofArray
+        |> Stream.choose(fun x -> if x.Value.DoNotTrack then None else Some x)
+        |> Stream.map(fun x -> StepStats.create x.Value.StepName x.ExecutionData duration)

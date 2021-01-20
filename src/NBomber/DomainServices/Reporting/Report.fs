@@ -12,7 +12,6 @@ open Serilog
 open NBomber.Configuration
 open NBomber.Contracts
 open NBomber.Extensions.InternalExtensions
-open NBomber.Infra.Dependency
 
 type ReportsContent = {
     TxtReport: string

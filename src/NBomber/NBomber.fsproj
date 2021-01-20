@@ -26,13 +26,13 @@
     <Compile Include="Domain\ConnectionPool.fs" />
     <Compile Include="Domain\DomainTypes.fs" />
     <Compile Include="Domain\StatisticsTypes.fs" />
+    <Compile Include="Domain\Statistics.fs" />
     <Compile Include="Domain\HintsAnalyzer.fs" />
     <Compile Include="Domain\Errors.fs" />
     <Compile Include="Domain\Feed.fs" />
     <Compile Include="Domain\Step.fs" />
     <Compile Include="Domain\LoadTimeLine.fs" />
     <Compile Include="Domain\Scenario.fs" />
-    <Compile Include="Domain\Statistics.fs" />
     <Compile Include="Domain\Concurrency\ScenarioActor.fs" />
     <Compile Include="Domain\Concurrency\ScenarioActorPool.fs" />
     <Compile Include="Domain\Concurrency\Scheduler\ConstantActorScheduler.fs" />
@@ -82,5 +82,10 @@
     <EmbeddedResource Include="Resources\HtmlReport\assets\css\sidebar.css" />
     <EmbeddedResource Include="Resources\HtmlReport\assets\css\index.css" />
     <EmbeddedResource Include="Resources\HtmlReport\index.html" />
+  </ItemGroup>
+  <ItemGroup>
+    <Reference Include="NBomber, Version=1.1.0.0, Culture=neutral, PublicKeyToken=null">
+      <HintPath>..\..\tests\NBomber.IntegrationTests\bin\Release\netcoreapp3.1\NBomber.dll</HintPath>
+    </Reference>
   </ItemGroup>
 </Project>

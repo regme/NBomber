@@ -3,6 +3,8 @@ namespace NBomber.DomainServices.Reporting.ViewModels
 open System
 open System.Data
 
+open FSharp.UMX
+
 open NBomber.Contracts
 open NBomber.Domain.HintsAnalyzer
 open NBomber.Extensions
@@ -84,7 +86,7 @@ module internal NodeStatsViewModel =
         RequestCount = stats.RequestCount
         OkCount = stats.OkCount
         FailCount = stats.FailCount
-        AllDataMB = stats.AllDataMB
+        AllDataMB = % stats.AllDataMB
         ScenarioStats = stats.ScenarioStats
         PluginStats = stats.PluginStats |> mapToPluginStatsViewModel
         NodeInfo = stats.NodeInfo
