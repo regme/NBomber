@@ -68,7 +68,8 @@ let ``Min/Mean/Max/RPS/DataTransfer should be properly count`` () =
     })
 
     Scenario.create "latency count test" [pullStep]
-    |> Scenario.withWarmUpDuration(TimeSpan.FromSeconds 1.0)
+    |> Scenario.withoutWarmUp
+    |> Scenario.withWarmUpDuration(TimeSpan.FromSeconds 3.0)
     |> Scenario.withLoadSimulations [KeepConstant(copies = 1, during = seconds 3)]
     |> NBomberRunner.registerScenario
     |> NBomberRunner.withReportFolder "./steps-tests/2/"
@@ -79,11 +80,13 @@ let ``Min/Mean/Max/RPS/DataTransfer should be properly count`` () =
                     |> Seq.collect(fun x -> x.StepStats)
                     |> Seq.find(fun x -> x.StepName = "pull step")
 
-        test <@ stats.RPS >= 5 @>
+        test <@ stats.RequestCount > 25 @>
+        test <@ stats.RequestCount <= 30 @>
+        test <@ stats.RPS > 8 @>
         test <@ stats.RPS <= 10 @>
-        test <@ stats.Min <= 110 @>
-        test <@ stats.Mean <= 120 @>
-        test <@ stats.Max <= 150 @>
+        test <@ stats.Min <= 110.0 @>
+        test <@ stats.Mean <= 120.0 @>
+        test <@ stats.Max <= 150.0 @>
         test <@ stats.MinDataKb = 0.1 @>
         test <@ stats.AllDataMB >= 0.0015 @>
 
@@ -250,7 +253,7 @@ let ``NBomber should allow to set custom response latency and handle it properly
 
     let step = Step.createAsync("step", fun context -> task {
         do! Task.Delay(milliseconds 100)
-        return Response.ok(latencyMs = 2_000) // set custom latency
+        return Response.ok(latencyMs = 2_000.0) // set custom latency
     })
 
     Scenario.create "scenario" [step]
@@ -265,9 +268,10 @@ let ``NBomber should allow to set custom response latency and handle it properly
                         |> Seq.collect(fun x -> x.StepStats)
                         |> Seq.find(fun x -> x.StepName = "step")
 
-        test <@ stepStats.OkCount > 5 @>
+        test <@ stepStats.OkCount > 20 @>
         test <@ stepStats.RPS = 0 @>
-        test <@ stepStats.Min = 2_000 @>
+        test <@ stepStats.Min = 2_000.0 @>
+        test <@ stepStats.Max = 2_000.0 @>
 
 [<Fact>]
 let ``context StopTest should stop all scenarios`` () =
@@ -358,7 +362,8 @@ let ``NBomber should support synchronous step execution`` () =
     )
 
     Scenario.create "scenario" [step]
-    |> Scenario.withoutWarmUp
+    //|> Scenario.withoutWarmUp
+    |> Scenario.withWarmUpDuration(seconds 5)
     |> Scenario.withLoadSimulations [KeepConstant(copies = 5, during = seconds 5)]
     |> NBomberRunner.registerScenario
     |> NBomberRunner.withReportFolder "./steps-tests/12/"

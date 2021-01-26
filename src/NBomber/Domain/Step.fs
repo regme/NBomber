@@ -19,9 +19,9 @@ open NBomber.Domain.DomainTypes
 open NBomber.Domain.ConnectionPool
 open NBomber.Domain.Statistics
 
-//todo: add max duration to filter extra responses
 type StepDep = {
     ScenarioName: string
+    ScenarioMaxDuration: float<microSec>
     Logger: ILogger
     CancellationToken: CancellationToken
     GlobalTimer: Stopwatch
@@ -53,18 +53,19 @@ module StepContext =
 
 module StepExecutionData =
 
-    let empty = {
+    let empty () = {
         OkCount = 0
         FailCount = 0
+        RequestLessSecCount = 0
         Errors = Dictionary<int, ErrorStats>()
         LatenciesMicroSec = LongHistogram(TimeStamp.Hours(1), 3)
-        MinMicroSec = 0.0<microSec>
+        MinMicroSec = % Double.MaxValue
         MaxMicroSec = 0.0<microSec>
         Less800 = 0
         More800Less1200 = 0
         More1200 = 0
         DataTransferBytes = LongHistogram(TimeStamp.Hours(1), 3)
-        MinBytes = 0.0<bytes>
+        MinBytes = % Double.MaxValue
         MaxBytes = 0.0<bytes>
         AllMB = 0.0<mb>
     }
@@ -72,7 +73,7 @@ module StepExecutionData =
 module RunningStep =
 
     let create (dep: StepDep) (step: Step) =
-        { Value = step; Context = StepContext.create dep step; ExecutionData = StepExecutionData.empty }
+        { Value = step; Context = StepContext.create dep step; ExecutionData = StepExecutionData.empty() }
 
     let updateContext (step: RunningStep) (data: Dict<string,obj>) =
         let context = step.Context
@@ -87,7 +88,7 @@ module RunningStep =
         context.FeedItem <- feedItem
         step
 
-    let addResponse (step: RunningStep) (response: Response) =
+    let addResponse (step: RunningStep) (response: StepResponse) =
 
         let data = step.ExecutionData
 
@@ -100,23 +101,29 @@ module RunningStep =
                 data.Errors.[res.ErrorCode] <- { ErrorCode = res.ErrorCode
                                                  Message = res.Exception.Value.Message
                                                  Count = 1 }
-        match response.Exception with
-        | Some ex -> addErrorResponse(response)
+        match response.ClientResponse.Exception with
+        | Some ex -> addErrorResponse(response.ClientResponse)
         | None    ->
-            let latencyMicroSec = response.LatencyMs |> UMX.tag |> Converter.fromMsToMicroSec
+            let latencyMicroSec =
+                if response.ClientResponse.LatencyMs > 0.0 then
+                    Converter.fromMsToMicroSec(% response.ClientResponse.LatencyMs)
+                else
+                    response.LatencyMicroSec
+
             let latencyMs = Converter.fromMicroSecToMs latencyMicroSec
-            let responseSize = response.SizeBytes |> float |> UMX.tag<bytes>
+            let responseSize = response.ClientResponse.SizeBytes |> float |> UMX.tag<bytes>
 
             data.OkCount <- data.OkCount + 1
+            data.RequestLessSecCount <- if latencyMs <= 1000.0<ms> then data.RequestLessSecCount + 1 else data.RequestLessSecCount
             data.LatenciesMicroSec.RecordValue(int64 latencyMicroSec)
             data.MinMicroSec <- Statistics.min data.MinMicroSec latencyMicroSec
-            data.MaxMicroSec <- Statistics.max data.MinMicroSec latencyMicroSec
+            data.MaxMicroSec <- Statistics.max data.MaxMicroSec latencyMicroSec
 
             if latencyMs < 800.0<ms> then data.Less800 <- data.Less800 + 1
             if latencyMs > 800.0<ms> && latencyMs < 1200.0<ms> then data.More800Less1200 <- data.More800Less1200 + 1
             if latencyMs > 1200.0<ms> then data.More1200 <- data.More1200 + 1
 
-            data.DataTransferBytes.RecordValue(int64 response.SizeBytes)
+            data.DataTransferBytes.RecordValue(int64 response.ClientResponse.SizeBytes)
             data.MinBytes <- Statistics.min data.MinBytes responseSize
             data.MaxBytes <- Statistics.max data.MaxBytes responseSize
             data.AllMB <- data.AllMB + Statistics.Converter.fromBytesToMB responseSize
@@ -181,7 +188,6 @@ let toUntypedExecuteAsync (execute: IStepContext<'TConnection,'TFeedItem> -> Tas
 
         execute typedCtx
 
-// todo: check TaskCanceledException why it's OK??? maybe add IsCancel via context.Dep requested
 let execStep (step: RunningStep) (globalTimer: Stopwatch) =
     let startTime = globalTimer.Elapsed
     try
@@ -190,21 +196,19 @@ let execStep (step: RunningStep) (globalTimer: Stopwatch) =
             | SyncExec exec  -> exec step.Context
             | AsyncExec exec -> (exec step.Context).Result
 
-        let latency =
-            if resp.LatencyMs > 0.0 then Converter.fromMsToMicroSec(% resp.LatencyMs)
-            else
-                let endTime = globalTimer.Elapsed - startTime
-                endTime.Ticks |> Statistics.Converter.fromTicksToMicroSec
+        let endTime = globalTimer.Elapsed
+        let latency = endTime - startTime
+        let endTimeMicroSec = endTime.Ticks |> Statistics.Converter.fromTicksToMicroSec
+        let latencyMicroSec = latency.Ticks |> Statistics.Converter.fromTicksToMicroSec
 
-        { Response = resp; StartTimeMs = UMX.tag startTime.TotalMilliseconds; LatencyMicroSec = latency }
+        { ClientResponse = resp; EndTimeMicroSec = endTimeMicroSec; LatencyMicroSec = latencyMicroSec }
     with
     | :? TaskCanceledException
     | :? OperationCanceledException ->
-        { Response = Response.ok(); StartTimeMs = -1.0<ms>; LatencyMicroSec = -1.0<microSec> }
+        { ClientResponse = Response.ok(); EndTimeMicroSec = -1.0<microSec>; LatencyMicroSec = -1.0<microSec> }
 
-    | ex -> { Response = Response.fail(ex); StartTimeMs = -1.0<ms>; LatencyMicroSec = -1.0<microSec> }
+    | ex -> { ClientResponse = Response.fail(ex); EndTimeMicroSec = -1.0<microSec>; LatencyMicroSec = -1.0<microSec> }
 
-// todo: check TaskCanceledException why it's OK??? maybe add IsCancel via context.Dep requested
 let execStepAsync (step: RunningStep) (globalTimer: Stopwatch) = task {
     let startTime = globalTimer.Elapsed
     try
@@ -213,19 +217,18 @@ let execStepAsync (step: RunningStep) (globalTimer: Stopwatch) = task {
             | SyncExec exec  -> Task.FromResult(exec step.Context)
             | AsyncExec exec -> exec step.Context
 
-        let latency =
-            if resp.LatencyMs > 0.0 then Converter.fromMsToMicroSec(% resp.LatencyMs)
-            else
-                let endTime = globalTimer.Elapsed - startTime
-                endTime.Ticks |> Statistics.Converter.fromTicksToMicroSec
+        let endTime = globalTimer.Elapsed
+        let latency = endTime - startTime
+        let endTimeMicroSec = endTime.Ticks |> Statistics.Converter.fromTicksToMicroSec
+        let latencyMicroSec = latency.Ticks |> Statistics.Converter.fromTicksToMicroSec
 
-        return { Response = resp; StartTimeMs = UMX.tag startTime.TotalMilliseconds; LatencyMicroSec = latency }
+        return { ClientResponse = resp; EndTimeMicroSec = endTimeMicroSec; LatencyMicroSec = latencyMicroSec }
     with
     | :? TaskCanceledException
     | :? OperationCanceledException ->
-        return { Response = Response.ok(); StartTimeMs = -1.0<ms>; LatencyMicroSec = -1.0<microSec> }
+        return { ClientResponse = Response.ok(); EndTimeMicroSec = -1.0<microSec>; LatencyMicroSec = -1.0<microSec> }
 
-    | ex -> return { Response = Response.fail(ex); StartTimeMs = -1.0<ms>; LatencyMicroSec = -1.0<microSec> }
+    | ex -> return { ClientResponse = Response.fail(ex); EndTimeMicroSec = -1.0<microSec>; LatencyMicroSec = -1.0<microSec> }
 }
 
 let execSteps (dep: StepDep) (steps: RunningStep[]) (stepsOrder: int[]) =
@@ -239,16 +242,14 @@ let execSteps (dep: StepDep) (steps: RunningStep[]) (stepsOrder: int[]) =
                 let mutable step = RunningStep.updateContext steps.[stepIndex] data
                 let response = execStep step dep.GlobalTimer
 
-                let payload = response.Response.Payload
+                if not dep.CancellationToken.IsCancellationRequested && not step.Value.DoNotTrack
+                   && response.LatencyMicroSec > 0.0<microSec> && response.EndTimeMicroSec <= dep.ScenarioMaxDuration then
+                    step <- RunningStep.addResponse step response
 
-                if not dep.CancellationToken.IsCancellationRequested && not step.Value.DoNotTrack then
-                    response.Response.Payload <- null
-                    step <- RunningStep.addResponse step response.Response
-
-                if response.Response.Exception.IsNone then
-                    data.[Constants.StepResponseKey] <- payload
+                if response.ClientResponse.Exception.IsNone then
+                    data.[Constants.StepResponseKey] <- response.ClientResponse.Payload
                 else
-                    dep.Logger.Error(response.Response.Exception.Value, "Step '{StepName}' from scenario '{ScenarioName}' has failed. ", step.Value.StepName, dep.ScenarioName)
+                    dep.Logger.Error(response.ClientResponse.Exception.Value, "Step '{StepName}' from scenario '{ScenarioName}' has failed. ", step.Value.StepName, dep.ScenarioName)
                     skipStep <- true
             with
             | ex -> dep.Logger.Fatal(ex, "Step with index '{0}' from scenario '{ScenarioName}' has failed.", stepIndex, dep.ScenarioName)
@@ -264,31 +265,20 @@ let execStepsAsync (dep: StepDep) (steps: RunningStep[]) (stepsOrder: int[]) = t
                 let mutable step = RunningStep.updateContext steps.[stepIndex] data
                 let! response = execStepAsync step dep.GlobalTimer
 
-                let payload = response.Response.Payload
+                let payload = response.ClientResponse.Payload
 
-                if not dep.CancellationToken.IsCancellationRequested && not step.Value.DoNotTrack then
-                    response.Response.Payload <- null
-                    step <- RunningStep.addResponse step response.Response
+                if not dep.CancellationToken.IsCancellationRequested && not step.Value.DoNotTrack
+                   && response.LatencyMicroSec > 0.0<microSec> && response.EndTimeMicroSec <= dep.ScenarioMaxDuration then
+                    step <- RunningStep.addResponse step response
 
-                if response.Response.Exception.IsNone then
+                if response.ClientResponse.Exception.IsNone then
                     data.[Constants.StepResponseKey] <- payload
                 else
-                    dep.Logger.Error(response.Response.Exception.Value, "Step '{StepName}' from scenario '{ScenarioName}' has failed. ", step.Value.StepName, dep.ScenarioName)
+                    dep.Logger.Error(response.ClientResponse.Exception.Value, "Step '{StepName}' from scenario '{ScenarioName}' has failed. ", step.Value.StepName, dep.ScenarioName)
                     skipStep <- true
             with
             | ex -> dep.Logger.Fatal(ex, "Step with index '{0}' from scenario '{ScenarioName}' has failed.", stepIndex, dep.ScenarioName)
 }
-
-//let filterByDuration (duration: TimeSpan) (stepResponses: Stream<StepResponse>) =
-//    let validEndTime (endTime) = endTime <= duration.TotalMilliseconds
-//    let createEndTime (response) = response.StartTimeMs + float response.LatencyMicroSec
-//
-//    stepResponses
-//    |> Stream.filter(fun x -> x.StartTimeMs <> -1.0) // to filter out TaskCanceledException
-//    |> Stream.choose(fun x ->
-//        match x |> createEndTime |> validEndTime with
-//        | true  -> Some x
-//        | false -> None)
 
 let isAllExecSync (steps: Step list) =
     steps

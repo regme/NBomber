@@ -12,7 +12,7 @@ let run () =
     let step1 = Step.createAsync("step_1", fun context -> task {
 
         // you can do any logic here: go to http, websocket etc
-        do! Task.Delay(seconds 1)
+        do! Task.Delay(milliseconds 1)
         return Response.ok(42) // this value will be passed as response for the next step
     })
 
@@ -23,9 +23,9 @@ let run () =
         return Response.ok();
     })
 
-    Scenario.create "hello_world_scenario" [step1; pause; step2]
+    Scenario.create "hello_world_scenario" [step1]//; pause; step2]
     |> Scenario.withoutWarmUp
-    |> Scenario.withLoadSimulations [KeepConstant(copies = 1, during = seconds 30)]
+    |> Scenario.withLoadSimulations [KeepConstant(copies = 100, during = seconds 30)]
     |> NBomberRunner.registerScenario
     |> NBomberRunner.withTestSuite "example"
     |> NBomberRunner.withTestName "hello_world_test"

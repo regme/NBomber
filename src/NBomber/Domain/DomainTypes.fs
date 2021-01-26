@@ -59,6 +59,7 @@ type Step = {
 type StepExecutionData = {
     mutable OkCount: int
     mutable FailCount: int
+    mutable RequestLessSecCount: int
     Errors: Dictionary<int, ErrorStats>
     LatenciesMicroSec: LongHistogram
     mutable MinMicroSec: float<microSec>
@@ -80,8 +81,8 @@ type RunningStep = {
 
 [<Struct>]
 type StepResponse = {
-    Response: Response
-    StartTimeMs: float<ms>
+    ClientResponse: Response
+    EndTimeMicroSec: float<microSec>
     LatencyMicroSec: float<microSec>
 }
 

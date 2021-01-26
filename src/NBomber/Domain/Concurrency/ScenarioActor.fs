@@ -6,13 +6,13 @@ open System.Threading.Tasks
 
 open Serilog
 open FSharp.Control.Tasks.NonAffine
+open FSharp.UMX
 open Nessos.Streams
 
 open NBomber.Contracts
 open NBomber.Domain
 open NBomber.Domain.DomainTypes
 open NBomber.Domain.Step
-open NBomber.Domain.Statistics
 
 type ActorDep = {
     Logger: ILogger
@@ -27,6 +27,7 @@ type ScenarioActor(dep: ActorDep, correlationId: CorrelationId) =
     let _isAllExecSync = Step.isAllExecSync dep.Scenario.Steps
 
     let _stepDep = { ScenarioName = dep.Scenario.ScenarioName
+                     ScenarioMaxDuration = dep.Scenario.PlanedDuration.TotalMilliseconds |> UMX.tag |> Statistics.Converter.fromMsToMicroSec
                      Logger = dep.Logger; CancellationToken = dep.CancellationToken
                      GlobalTimer = dep.GlobalTimer; CorrelationId = correlationId
                      ExecStopCommand = dep.ExecStopCommand }
@@ -77,4 +78,4 @@ type ScenarioActor(dep: ActorDep, correlationId: CorrelationId) =
         _steps
         |> Stream.ofArray
         |> Stream.choose(fun x -> if x.Value.DoNotTrack then None else Some x)
-        |> Stream.map(fun x -> StepStats.create x.Value.StepName x.ExecutionData duration)
+        |> Stream.map(fun x -> Statistics.StepStats.create x.Value.StepName x.ExecutionData duration)

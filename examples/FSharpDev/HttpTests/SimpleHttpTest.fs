@@ -22,7 +22,7 @@ let run () =
 
     Scenario.create "nbomber_web_site_scenario" [step]
     |> Scenario.withWarmUpDuration(seconds 5)
-    |> Scenario.withLoadSimulations [InjectPerSec(rate = 20, during = seconds 30)]
+    |> Scenario.withLoadSimulations [InjectPerSec(rate = 500, during = seconds 30)]
     |> NBomberRunner.registerScenario
     |> NBomberRunner.withWorkerPlugins [new PingPlugin()]
     |> NBomberRunner.withTestSuite "http"

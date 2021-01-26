@@ -291,9 +291,9 @@ let ``should be initialized after scenario init``() =
     |> fun allStats -> test <@ lastInvokeComponent = "connection_pool" @>
 
 [<Fact>]
-let ``should support 65K of connections``() =
+let ``should support 5K of connections``() =
 
-    let poolCount = 65_000
+    let poolCount = 5_000
     let mutable invokeCount = 0
 
     let pool =
@@ -307,18 +307,23 @@ let ``should support 65K of connections``() =
         )
 
     let step1 = Step.createAsync("step_1", pool, fun context -> task {
-        do! Task.Delay(milliseconds 100)
+        do! Task.Delay(milliseconds 500)
         return Response.ok(context.Connection)
     })
 
     Scenario.create "test" [step1]
     |> Scenario.withoutWarmUp
-    |> Scenario.withLoadSimulations [KeepConstant(copies = poolCount, during = seconds 2)]
+    |> Scenario.withLoadSimulations [KeepConstant(copies = poolCount, during = seconds 1)]
     |> NBomberRunner.registerScenario
     |> NBomberRunner.withReportFolder "./connection-pool/9/"
     |> NBomberRunner.run
     |> Result.getOk
-    |> fun allStats -> test <@ invokeCount = poolCount @>
+    |> fun allStats ->
+        let stepStats = allStats.ScenarioStats.[0].StepStats.[0]
+        test <@ invokeCount = poolCount @>
+        test <@ stepStats.RPS >= 5_000 @>
+        test <@ stepStats.Min <= 510.0 @>
+        test <@ stepStats.LatencyCount.Less800 = 5_000 @>
 
 [<Fact>]
 let ``should not allow to have duplicates with the same name but different implementation``() =

@@ -15,7 +15,7 @@ type HintResult = {
 let private analyzeScenarioFails (scnStats: ScenarioStats[]) =
 
     let printHint (scn: ScenarioStats) =
-        $"Scenario '{scn.ScenarioName}' has '{scn.FailCount}' errors that affect overall statistics." + 
+        $"Scenario '{scn.ScenarioName}' has '{scn.FailCount}' errors that affect overall statistics." +
         " NBomber is not taking error request's latency into latency statistics." +
         " So make sure that your load tests don't have errors."
 
@@ -32,7 +32,7 @@ let private analyzeRPS (scnStats: ScenarioStats[]) =
     scnStats
     |> Seq.collect(fun scn ->
         scn.StepStats
-        |> Seq.filter(fun step -> step.RPS = 0)
+        |> Seq.filter(fun step -> step.RPS = 0.0)
         |> Seq.map(fun step -> scn.ScenarioName, step.StepName)
     )
     |> Seq.map(fun (scnName,stepName) -> { SourceName = scnName; SourceType = Scenario; Hint = printHint(scnName, stepName) })

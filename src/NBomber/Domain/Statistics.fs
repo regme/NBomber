@@ -43,13 +43,7 @@ let calcRPS (requestCount: int) (executionTime: TimeSpan) =
     let totalSec = if executionTime.TotalSeconds < 1.0 then 1.0
                    else executionTime.TotalSeconds
 
-    requestCount / int(totalSec)
-
-//let roundResult (value: float) =
-//    let result = Math.Round(value, 2)
-//    if result > 0.01 then result
-//    else Math.Round(value, 4)
-//    |> UMX.tag
+    float requestCount / totalSec
 
 module ErrorStats =
 
@@ -69,55 +63,90 @@ module StepStats =
 
     let create (stepName: string) (stepData: StepExecutionData) (duration: TimeSpan) =
         let requestCount = stepData.OkCount + stepData.FailCount
+
+        let latencies =
+            if stepData.LatenciesMicroSec.TotalCount > 0L then ValueSome(stepData.LatenciesMicroSec.Copy())
+            else ValueNone
+
+        let dataTransfer =
+            if stepData.DataTransferBytes.TotalCount > 0L then ValueSome(stepData.DataTransferBytes.Copy())
+            else ValueNone
+
         { StepName = stepName
           RequestCount = requestCount
           OkCount = stepData.OkCount
           FailCount = stepData.FailCount
           Min = stepData.MinMicroSec |> Converter.fromMicroSecToMs |> UMX.untag
-          Mean = stepData.LatenciesMicroSec.GetMean() |> UMX.tag |> Converter.fromMicroSecToMs |> UMX.untag
+
+          Mean = latencies
+                 |> ValueOption.map(fun x -> x.GetMean() |> UMX.tag |> Converter.fromMicroSecToMs |> UMX.untag)
+                 |> ValueOption.defaultValue 0.0
+
           Max = stepData.MaxMicroSec |> Converter.fromMicroSecToMs |> UMX.untag
-          RPS = calcRPS requestCount duration
-          Percent50 = stepData.LatenciesMicroSec.GetValueAtPercentile(50.0) |> float |> fromMicroSecToMs
-          Percent75 = stepData.LatenciesMicroSec.GetValueAtPercentile(75.0) |> float |> fromMicroSecToMs
-          Percent95 = stepData.LatenciesMicroSec.GetValueAtPercentile(95.0) |> float |> fromMicroSecToMs
-          Percent99 = stepData.LatenciesMicroSec.GetValueAtPercentile(99.0) |> float |> fromMicroSecToMs
-          StdDev = stepData.LatenciesMicroSec.GetStdDeviation()
+          RPS = calcRPS stepData.RequestLessSecCount duration
+
+          Percent50 = latencies
+                      |> ValueOption.map(fun x -> x.GetValueAtPercentile(50.0) |> float |> fromMicroSecToMs)
+                      |> ValueOption.defaultValue 0.0
+
+          Percent75 = latencies
+                      |> ValueOption.map(fun x -> x.GetValueAtPercentile(75.0) |> float |> fromMicroSecToMs)
+                      |> ValueOption.defaultValue 0.0
+
+          Percent95 = latencies
+                      |> ValueOption.map(fun x -> x.GetValueAtPercentile(95.0) |> float |> fromMicroSecToMs)
+                      |> ValueOption.defaultValue 0.0
+
+          Percent99 = latencies
+                      |> ValueOption.map(fun x -> x.GetValueAtPercentile(50.0) |> float |> fromMicroSecToMs)
+                      |> ValueOption.defaultValue 0.0
+
+          StdDev = latencies
+                   |> ValueOption.map(fun x -> x.GetStdDeviation() |> fromMicroSecToMs)
+                   |> ValueOption.defaultValue 0.0
+
           LatencyCount = { Less800 = stepData.Less800; More800Less1200 = stepData.More800Less1200; More1200 = stepData.More1200 }
           MinDataKb = stepData.MinBytes |> Converter.fromBytesToKb |> UMX.untag
-          MeanDataKb = stepData.DataTransferBytes.GetMean() |> UMX.tag |> Converter.fromBytesToKb |> UMX.untag
+
+          MeanDataKb = dataTransfer
+                       |> ValueOption.map(fun x -> x.GetMean() |> UMX.tag |> Converter.fromBytesToKb |> UMX.untag)
+                       |> ValueOption.defaultValue 0.0
+
           MaxDataKb = stepData.MaxBytes |> Converter.fromBytesToKb |> UMX.untag
           AllDataMB = % stepData.AllMB
           ErrorStats = stepData.Errors.Values |> Stream.ofSeq |> Stream.toArray } // we use Stream for safe enumeration
 
-    let merge (duration: TimeSpan) (stepsStats: Stream<StepStats>) =
+    let merge (stepsStats: Stream<StepStats>) =
         stepsStats
         |> Stream.groupBy(fun x -> x.StepName)
         |> Stream.map(fun (name, stats) ->
             let statsStream = stats |> Stream.ofSeq
             let requestCount = statsStream |> Stream.sumBy(fun x -> x.RequestCount)
+            let rps = statsStream |> Stream.sumBy(fun x -> x.RPS)
             let less800 = statsStream |> Stream.sumBy(fun x -> x.LatencyCount.Less800)
             let more800Less1200 = statsStream |> Stream.sumBy(fun x -> x.LatencyCount.More800Less1200)
             let more1200 = statsStream |> Stream.sumBy(fun x -> x.LatencyCount.More1200)
+            let errorStats = ErrorStats.merge statsStream
 
             { StepName = name
               RequestCount = requestCount
               OkCount = statsStream |> Stream.sumBy(fun x -> x.OkCount)
               FailCount = statsStream |> Stream.sumBy(fun x -> x.FailCount)
-              Min = statsStream |> Stream.map(fun x -> % x.Min) |> Stream.minOrDefault 0.0
-              Mean = statsStream |> Stream.map(fun x -> % x.Mean) |> Stream.averageOrDefault 0.0
-              Max = statsStream |> Stream.map(fun x -> % x.Mean) |> Stream.maxOrDefault 0.0
-              RPS = calcRPS requestCount duration
-              Percent50 = statsStream |> Stream.map(fun x -> % x.Percent50) |> Stream.averageOrDefault 0.0
-              Percent75 = statsStream |> Stream.map(fun x -> % x.Percent75) |> Stream.averageOrDefault 0.0
-              Percent95 = statsStream |> Stream.map(fun x -> % x.Percent95) |> Stream.averageOrDefault 0.0
-              Percent99 = statsStream |> Stream.map(fun x -> % x.Percent99) |> Stream.averageOrDefault 0.0
-              StdDev = statsStream |> Stream.map(fun x -> % x.StdDev) |> Stream.averageOrDefault 0.0
+              Min = statsStream |> Stream.map(fun x -> % x.Min) |> Stream.minOrDefault 0.0 |> Converter.roundResult
+              Mean = statsStream |> Stream.map(fun x -> % x.Mean) |> Stream.averageOrDefault 0.0 |> Converter.roundResult
+              Max = statsStream |> Stream.map(fun x -> % x.Max) |> Stream.maxOrDefault 0.0 |> Converter.roundResult
+              RPS = rps |> Converter.roundResult
+              Percent50 = statsStream |> Stream.map(fun x -> % x.Percent50) |> Stream.averageOrDefault 0.0 |> Converter.roundResult
+              Percent75 = statsStream |> Stream.map(fun x -> % x.Percent75) |> Stream.averageOrDefault 0.0 |> Converter.roundResult
+              Percent95 = statsStream |> Stream.map(fun x -> % x.Percent95) |> Stream.averageOrDefault 0.0 |> Converter.roundResult
+              Percent99 = statsStream |> Stream.map(fun x -> % x.Percent99) |> Stream.averageOrDefault 0.0 |> Converter.roundResult
+              StdDev = statsStream |> Stream.map(fun x -> % x.StdDev) |> Stream.averageOrDefault 0.0 |> Converter.roundResult
               LatencyCount = { Less800 = less800; More800Less1200 = more800Less1200; More1200 = more1200 }
-              MinDataKb = statsStream |> Stream.map(fun x -> % x.MinDataKb) |> Stream.minOrDefault 0.0
-              MeanDataKb = statsStream |> Stream.map(fun x -> % x.MeanDataKb) |> Stream.averageOrDefault 0.0
-              MaxDataKb = statsStream |> Stream.map(fun x -> % x.MaxDataKb) |> Stream.maxOrDefault 0.0
-              AllDataMB = statsStream |> Stream.sumBy(fun x -> % x.AllDataMB)
-              ErrorStats = statsStream |> Stream.collect(fun x -> x.ErrorStats |> Stream.ofArray) |> Stream.toArray })
+              MinDataKb = statsStream |> Stream.map(fun x -> % x.MinDataKb) |> Stream.minOrDefault 0.0 |> Converter.roundResult
+              MeanDataKb = statsStream |> Stream.map(fun x -> % x.MeanDataKb) |> Stream.averageOrDefault 0.0 |> Converter.roundResult
+              MaxDataKb = statsStream |> Stream.map(fun x -> % x.MaxDataKb) |> Stream.maxOrDefault 0.0 |> Converter.roundResult
+              AllDataMB = statsStream |> Stream.sumBy(fun x -> % x.AllDataMB) |> Converter.roundResult
+              ErrorStats = errorStats |> Stream.toArray })
 
 module ScenarioStats =
 
@@ -136,7 +165,7 @@ module ScenarioStats =
               RequestCount = mergedStats |> Stream.sumBy(fun x -> x.RequestCount)
               OkCount = mergedStats |> Stream.sumBy(fun x -> x.OkCount)
               FailCount = mergedStats |> Stream.sumBy(fun x -> x.FailCount)
-              AllDataMB = mergedStats |> Stream.sumBy(fun x -> % x.AllDataMB)
+              AllDataMB = mergedStats |> Stream.sumBy(fun x -> x.AllDataMB) |> Converter.roundResult
               StepStats = mergedStats |> Stream.toArray
               LatencyCount = { Less800 = less800; More800Less1200 = more800Less1200; More1200 = more1200 }
               LoadSimulationStats = simulationStats
@@ -144,7 +173,7 @@ module ScenarioStats =
               ErrorStats = mergedStats |> ErrorStats.merge |> Stream.toArray }
 
         stepsStats
-        |> StepStats.merge duration
+        |> StepStats.merge
         |> createByStepStats scenario.ScenarioName duration simulationStats
 
 module NodeStats =

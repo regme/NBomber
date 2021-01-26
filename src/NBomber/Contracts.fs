@@ -18,8 +18,9 @@ type CorrelationId = {
     CopyNumber: int
 }
 
+[<Struct>]
 type Response = {
-    mutable Payload: obj
+    Payload: obj
     SizeBytes: int
     Exception: exn option
     ErrorCode: int
@@ -73,7 +74,7 @@ type StepStats = {
     Min: float
     Mean: float
     Max: float
-    RPS: int
+    RPS: float
     Percent50: float
     Percent75: float
     Percent95: float
