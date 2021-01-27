@@ -61,6 +61,9 @@ module StepStats =
 
     let inline private fromMicroSecToMs (value: float) = value |> UMX.tag |> Converter.fromMicroSecToMs |> UMX.untag
 
+    //todo: StepExecutionData should be cloned and returned
+    //todo: create OkLatency, FailLatency and data transfer percentile
+    //todo: add test on fail count
     let create (stepName: string) (stepData: StepExecutionData) (duration: TimeSpan) =
         let requestCount = stepData.OkCount + stepData.FailCount
 
@@ -72,11 +75,14 @@ module StepStats =
             if stepData.DataTransferBytes.TotalCount > 0L then ValueSome(stepData.DataTransferBytes.Copy())
             else ValueNone
 
+        let min = if % stepData.MinMicroSec = Double.MaxValue then 0.0<microSec> else stepData.MinMicroSec
+        let minBytes = if % stepData.MinBytes = Double.MaxValue then 0.0<bytes> else stepData.MinBytes
+
         { StepName = stepName
           RequestCount = requestCount
           OkCount = stepData.OkCount
           FailCount = stepData.FailCount
-          Min = stepData.MinMicroSec |> Converter.fromMicroSecToMs |> UMX.untag
+          Min = min |> Converter.fromMicroSecToMs |> UMX.untag
 
           Mean = latencies
                  |> ValueOption.map(fun x -> x.GetMean() |> UMX.tag |> Converter.fromMicroSecToMs |> UMX.untag)
@@ -98,7 +104,7 @@ module StepStats =
                       |> ValueOption.defaultValue 0.0
 
           Percent99 = latencies
-                      |> ValueOption.map(fun x -> x.GetValueAtPercentile(50.0) |> float |> fromMicroSecToMs)
+                      |> ValueOption.map(fun x -> x.GetValueAtPercentile(99.0) |> float |> fromMicroSecToMs)
                       |> ValueOption.defaultValue 0.0
 
           StdDev = latencies
@@ -106,7 +112,7 @@ module StepStats =
                    |> ValueOption.defaultValue 0.0
 
           LatencyCount = { Less800 = stepData.Less800; More800Less1200 = stepData.More800Less1200; More1200 = stepData.More1200 }
-          MinDataKb = stepData.MinBytes |> Converter.fromBytesToKb |> UMX.untag
+          MinDataKb = minBytes |> Converter.fromBytesToKb |> UMX.untag
 
           MeanDataKb = dataTransfer
                        |> ValueOption.map(fun x -> x.GetMean() |> UMX.tag |> Converter.fromBytesToKb |> UMX.untag)

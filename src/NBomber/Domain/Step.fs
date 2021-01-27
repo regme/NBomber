@@ -88,46 +88,46 @@ module RunningStep =
         context.FeedItem <- feedItem
         step
 
-    let addResponse (step: RunningStep) (response: StepResponse) =
-
+    let addOkResponse (step: RunningStep) (response: StepResponse) =
         let data = step.ExecutionData
 
-        let addErrorResponse (res: Response) =
-            data.FailCount <- data.FailCount + 1
-            match data.Errors.TryGetValue res.ErrorCode with
-            | true, errorStats ->
-                data.Errors.[res.ErrorCode] <- { errorStats with Count = errorStats.Count + 1 }
-            | false, _ ->
-                data.Errors.[res.ErrorCode] <- { ErrorCode = res.ErrorCode
-                                                 Message = res.Exception.Value.Message
-                                                 Count = 1 }
-        match response.ClientResponse.Exception with
-        | Some ex -> addErrorResponse(response.ClientResponse)
-        | None    ->
-            let latencyMicroSec =
-                if response.ClientResponse.LatencyMs > 0.0 then
-                    Converter.fromMsToMicroSec(% response.ClientResponse.LatencyMs)
-                else
-                    response.LatencyMicroSec
+        let latencyMicroSec =
+            if response.ClientResponse.LatencyMs > 0.0 then
+                Converter.fromMsToMicroSec(% response.ClientResponse.LatencyMs)
+            else
+                response.LatencyMicroSec
 
-            let latencyMs = Converter.fromMicroSecToMs latencyMicroSec
-            let responseSize = response.ClientResponse.SizeBytes |> float |> UMX.tag<bytes>
+        let latencyMs = Converter.fromMicroSecToMs latencyMicroSec
+        let responseSize = response.ClientResponse.SizeBytes |> float |> UMX.tag<bytes>
 
-            data.OkCount <- data.OkCount + 1
-            data.RequestLessSecCount <- if latencyMs <= 1000.0<ms> then data.RequestLessSecCount + 1 else data.RequestLessSecCount
-            data.LatenciesMicroSec.RecordValue(int64 latencyMicroSec)
-            data.MinMicroSec <- Statistics.min data.MinMicroSec latencyMicroSec
-            data.MaxMicroSec <- Statistics.max data.MaxMicroSec latencyMicroSec
+        data.OkCount <- data.OkCount + 1
+        data.RequestLessSecCount <- if latencyMs <= 1000.0<ms> then data.RequestLessSecCount + 1 else data.RequestLessSecCount
+        data.LatenciesMicroSec.RecordValue(int64 latencyMicroSec)
+        data.MinMicroSec <- Statistics.min data.MinMicroSec latencyMicroSec
+        data.MaxMicroSec <- Statistics.max data.MaxMicroSec latencyMicroSec
 
-            if latencyMs < 800.0<ms> then data.Less800 <- data.Less800 + 1
-            if latencyMs > 800.0<ms> && latencyMs < 1200.0<ms> then data.More800Less1200 <- data.More800Less1200 + 1
-            if latencyMs > 1200.0<ms> then data.More1200 <- data.More1200 + 1
+        if latencyMs < 800.0<ms> then data.Less800 <- data.Less800 + 1
+        if latencyMs > 800.0<ms> && latencyMs < 1200.0<ms> then data.More800Less1200 <- data.More800Less1200 + 1
+        if latencyMs > 1200.0<ms> then data.More1200 <- data.More1200 + 1
 
-            data.DataTransferBytes.RecordValue(int64 response.ClientResponse.SizeBytes)
-            data.MinBytes <- Statistics.min data.MinBytes responseSize
-            data.MaxBytes <- Statistics.max data.MaxBytes responseSize
-            data.AllMB <- data.AllMB + Statistics.Converter.fromBytesToMB responseSize
+        data.DataTransferBytes.RecordValue(int64 response.ClientResponse.SizeBytes)
+        data.MinBytes <- Statistics.min data.MinBytes responseSize
+        data.MaxBytes <- Statistics.max data.MaxBytes responseSize
+        data.AllMB <- data.AllMB + Statistics.Converter.fromBytesToMB responseSize
+        step
 
+    let addErrorResponse (step: RunningStep) (response: StepResponse) =
+        let data = step.ExecutionData
+        let res = response.ClientResponse
+        data.FailCount <- data.FailCount + 1
+
+        match data.Errors.TryGetValue res.ErrorCode with
+        | true, errorStats ->
+            data.Errors.[res.ErrorCode] <- { errorStats with Count = errorStats.Count + 1 }
+        | false, _ ->
+            data.Errors.[res.ErrorCode] <- { ErrorCode = res.ErrorCode
+                                             Message = res.Exception.Value.Message
+                                             Count = 1 }
         step
 
 let toUntypedExecute (execute: IStepContext<'TConnection,'TFeedItem> -> Response) =
@@ -242,15 +242,17 @@ let execSteps (dep: StepDep) (steps: RunningStep[]) (stepsOrder: int[]) =
                 let mutable step = RunningStep.updateContext steps.[stepIndex] data
                 let response = execStep step dep.GlobalTimer
 
-                if not dep.CancellationToken.IsCancellationRequested && not step.Value.DoNotTrack
-                   && response.LatencyMicroSec > 0.0<microSec> && response.EndTimeMicroSec <= dep.ScenarioMaxDuration then
-                    step <- RunningStep.addResponse step response
+                if not dep.CancellationToken.IsCancellationRequested && not step.Value.DoNotTrack then
+                   match response.ClientResponse.Exception with
+                   | Some ex ->
+                       step <- RunningStep.addErrorResponse step response
+                       dep.Logger.Error(ex, "Step '{StepName}' from scenario '{ScenarioName}' has failed. ", step.Value.StepName, dep.ScenarioName)
+                       skipStep <- true
 
-                if response.ClientResponse.Exception.IsNone then
-                    data.[Constants.StepResponseKey] <- response.ClientResponse.Payload
-                else
-                    dep.Logger.Error(response.ClientResponse.Exception.Value, "Step '{StepName}' from scenario '{ScenarioName}' has failed. ", step.Value.StepName, dep.ScenarioName)
-                    skipStep <- true
+                   | None ->
+                       if response.LatencyMicroSec > 0.0<microSec> && response.EndTimeMicroSec <= dep.ScenarioMaxDuration then
+                           step <- RunningStep.addOkResponse step response
+                           data.[Constants.StepResponseKey] <- response.ClientResponse.Payload
             with
             | ex -> dep.Logger.Fatal(ex, "Step with index '{0}' from scenario '{ScenarioName}' has failed.", stepIndex, dep.ScenarioName)
 
@@ -265,17 +267,17 @@ let execStepsAsync (dep: StepDep) (steps: RunningStep[]) (stepsOrder: int[]) = t
                 let mutable step = RunningStep.updateContext steps.[stepIndex] data
                 let! response = execStepAsync step dep.GlobalTimer
 
-                let payload = response.ClientResponse.Payload
+                if not dep.CancellationToken.IsCancellationRequested && not step.Value.DoNotTrack then
+                   match response.ClientResponse.Exception with
+                   | Some ex ->
+                       step <- RunningStep.addErrorResponse step response
+                       dep.Logger.Error(ex, "Step '{StepName}' from scenario '{ScenarioName}' has failed. ", step.Value.StepName, dep.ScenarioName)
+                       skipStep <- true
 
-                if not dep.CancellationToken.IsCancellationRequested && not step.Value.DoNotTrack
-                   && response.LatencyMicroSec > 0.0<microSec> && response.EndTimeMicroSec <= dep.ScenarioMaxDuration then
-                    step <- RunningStep.addResponse step response
-
-                if response.ClientResponse.Exception.IsNone then
-                    data.[Constants.StepResponseKey] <- payload
-                else
-                    dep.Logger.Error(response.ClientResponse.Exception.Value, "Step '{StepName}' from scenario '{ScenarioName}' has failed. ", step.Value.StepName, dep.ScenarioName)
-                    skipStep <- true
+                   | None ->
+                       if response.LatencyMicroSec > 0.0<microSec> && response.EndTimeMicroSec <= dep.ScenarioMaxDuration then
+                           step <- RunningStep.addOkResponse step response
+                           data.[Constants.StepResponseKey] <- response.ClientResponse.Payload
             with
             | ex -> dep.Logger.Fatal(ex, "Step with index '{0}' from scenario '{ScenarioName}' has failed.", stepIndex, dep.ScenarioName)
 }
